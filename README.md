@@ -351,7 +351,7 @@ pip install -r requirements-dev.txt  # 如果有开发依赖
 
 ## 📜 许可证
 
-MIT License
+GPL-3.0 License
 
 ## 🔗 相关资源
 
