@@ -125,19 +125,33 @@ class CompilerEngine:
             logger.error(f"编译过程中发生异常: {e}", exc_info=True)
             return False
     
-    def _attempt_build(self, project_info: Dict) -> Tuple[bool, Optional[str]]:
+    def _attempt_build(self, project_info: Dict) -> Tuple[bool, str]:
         """
         尝试执行编译
         
+        Args:
+            project_info: 项目信息字典，会被就地修改以更新build_command
+        
         Returns:
-            (是否成功, 编译命令)
+            Tuple[bool, str]: (是否成功, 使用的构建命令)
         """
-        build_system = project_info.get('build_system', 'unknown')
-        build_command = project_info.get('build_command')
+        build_command = project_info.get('build_command', '')
         
         if not build_command:
-            logger.info("未检测到标准构建命令，请求LLM生成...")
-            build_command = self._get_build_command_from_llm(project_info)
+            logger.error("未找到构建命令")
+            self.compile_history.append({
+                'command': '',
+                'returncode': -1,
+                'stdout': '',
+                'stderr': 'No build command found'
+            })
+            return False, ""
+        
+        # 修复常见的构建命令问题
+        build_command = self._fix_build_command(build_command)
+        
+        # 更新project_info中的构建命令，以便后续使用
+        project_info['build_command'] = build_command
         
         logger.info(f"执行编译命令: {build_command}")
         
@@ -148,7 +162,7 @@ class CompilerEngine:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5分钟超时
+                timeout=6000
             )
             
             # 记录编译历史
@@ -164,16 +178,49 @@ class CompilerEngine:
                 return True, build_command
             else:
                 logger.warning(f"❌ 编译失败，返回码: {result.returncode}")
-                logger.debug(f"标准输出:\n{result.stdout}")
-                logger.debug(f"错误输出:\n{result.stderr}")
                 return False, build_command
                 
         except subprocess.TimeoutExpired:
-            logger.error("编译超时（超过5分钟）")
+            logger.error("编译超时")
+            self.compile_history.append({
+                'command': build_command,
+                'returncode': -1,
+                'stdout': '',
+                'stderr': 'Build timeout'
+            })
             return False, build_command
         except Exception as e:
-            logger.error(f"执行编译命令时出错: {e}")
+            logger.error(f"编译过程异常: {e}")
+            self.compile_history.append({
+                'command': build_command,
+                'returncode': -1,
+                'stdout': '',
+                'stderr': str(e)
+            })
             return False, build_command
+    
+    def _fix_build_command(self, command: str) -> str:
+        """
+        修复常见的构建命令问题
+        
+        Args:
+            command: 原始构建命令
+            
+        Returns:
+            修复后的命令
+        """
+        # 修复 mkdir build -> mkdir -p build
+        command = command.replace('mkdir build', 'mkdir -p build')
+        
+        # 如果命令以 mkdir 开头且后面跟着 &&，确保使用 -p
+        if command.startswith('mkdir ') and '&&' in command:
+            parts = command.split('&&', 1)
+            mkdir_part = parts[0].strip()
+            if ' -p ' not in mkdir_part:
+                mkdir_part = mkdir_part.replace('mkdir ', 'mkdir -p ')
+                command = mkdir_part + ' && ' + parts[1]
+        
+        return command
     
     def _get_build_command_from_llm(self, project_info: Dict) -> str:
         """使用LLM生成构建命令"""
@@ -218,6 +265,10 @@ class CompilerEngine:
         """
         迭代修复编译错误
         
+        Args:
+            project_info: 项目信息，会被就地修改以更新build_command
+            build_command: 当前使用的构建命令
+        
         Returns:
             bool: 是否修复成功
         """
@@ -232,20 +283,26 @@ class CompilerEngine:
             
             # 使用LLM分析并修复错误
             logger.info("分析编译错误...")
-            fix_applied = self.error_handler.analyze_and_fix(
+            fix_result = self.error_handler.analyze_and_fix(
                 project_path=self.project_path,
                 project_info=project_info,
                 error_output=last_build['stderr'],
                 stdout_output=last_build['stdout']
             )
             
-            if not fix_applied:
+            if not fix_result:
                 logger.warning("LLM未能提供有效的修复方案")
                 return False
             
+            # 如果LLM提供了新的构建命令，更新它
+            if isinstance(fix_result, dict) and fix_result.get('build_command'):
+                new_build_command = fix_result['build_command']
+                logger.info(f"LLM建议使用新的构建命令: {new_build_command}")
+                project_info['build_command'] = new_build_command
+            
             # 重新尝试编译
             logger.info("应用修复后重新编译...")
-            success, _ = self._attempt_build(project_info)
+            success, used_command = self._attempt_build(project_info)
             
             if success:
                 logger.info(f"✅ 第 {attempt + 1} 次修复后编译成功!")

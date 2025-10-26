@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
 自动化编译系统主入口
+Version: 1.1.5
+- v1.0: 基础自动化编译功能
+- v1.1: 添加README解析功能，优先从README获取构建指令
+- v1.1.1: 修复README解析中的命令清理问题，支持子目录检测
+- v1.1.2: 改进命令清理逻辑和子目录检测，增强libexpat类项目支持
+- v1.1.3: 修复误入测试目录问题，优先使用根目录构建
+- v1.1.4: 修复子目录检测逻辑，不将configure.ac误判为实际构建文件
+- v1.1.5: 重构prompt策略，根据项目结构生成不同的指令，强制子目录一致性验证
 """
 
 import sys
@@ -12,6 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from compiler_engine import CompilerEngine
+
+VERSION = "1.1.5"
 
 
 def setup_logging(log_level: str):
@@ -30,7 +40,7 @@ def setup_logging(log_level: str):
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='自动化编译系统 - 使用LLM智能处理编译过程',
+        description=f'自动化编译系统 v{VERSION} - 使用LLM智能处理编译过程',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -42,6 +52,11 @@ def main():
   
   # 显示详细日志
   python main.py /path/to/project --log-level DEBUG
+
+新功能 (v1.1):
+  - 自动解析项目README文件，提取构建指令
+  - 优先使用README中的构建方法，提高编译成功率
+  - 修复了构建命令更新机制，避免重复错误
         """
     )
     
@@ -91,7 +106,7 @@ def main():
     
     # 输出欢迎信息
     print("="*70)
-    print("🤖 自动化编译系统 v1.0")
+    print(f"🤖 自动化编译系统 v{VERSION}")
     print("📁 项目路径:", project_path)
     print("⚙️  配置文件:", args.config)
     print("="*70)

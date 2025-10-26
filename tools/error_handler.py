@@ -22,7 +22,7 @@ class ErrorHandler:
         self.llm_client = llm_client
     
     def analyze_and_fix(self, project_path: Path, project_info: Dict,
-                       error_output: str, stdout_output: str = "") -> bool:
+                       error_output: str, stdout_output: str = "") -> Optional[Dict]:
         """
         分析编译错误并尝试修复
         
@@ -33,7 +33,7 @@ class ErrorHandler:
             stdout_output: 标准输出
             
         Returns:
-            bool: 是否成功应用修复
+            Optional[Dict]: 修复结果，包含可能的新构建命令。如果修复失败返回None
         """
         logger.info("分析编译错误...")
         
@@ -48,13 +48,22 @@ class ErrorHandler:
         
         if not fix_plan:
             logger.error("LLM未能生成有效的修复方案")
-            return False
+            return None
         
         # 3. 应用修复方案
         logger.info("应用修复方案...")
         success = self._apply_fixes(project_path, fix_plan)
         
-        return success
+        if not success:
+            return None
+        
+        # 4. 检查是否有新的构建命令建议
+        result = {'success': True}
+        if fix_plan.get('new_build_command'):
+            result['build_command'] = fix_plan['new_build_command']
+            logger.info(f"LLM建议更新构建命令为: {fix_plan['new_build_command']}")
+        
+        return result
     
     def _extract_error_info(self, error_output: str, stdout_output: str) -> Dict:
         """提取错误信息"""
@@ -219,6 +228,10 @@ class ErrorHandler:
                                     "items": {"type": "string"},
                                     "description": "需要执行的命令（不含sudo，如：apt-get install -y cmake, pip install xxx, npm install xxx）"
                                 },
+                                "new_build_command": {
+                                    "type": "string",
+                                    "description": "如果需要修改构建命令本身（如使用mkdir -p而非mkdir），在此提供新的完整构建命令"
+                                },
                                 "manual_steps": {
                                     "type": "array",
                                     "items": {"type": "string"},
@@ -318,7 +331,7 @@ class ErrorHandler:
                     cwd=project_path,
                     capture_output=True,
                     text=True,
-                    timeout=600  # 安装工具可能需要更长时间
+                    timeout=6000  # 安装工具可能需要更长时间
                 )
                 
                 if result.returncode != 0:
